@@ -1,7 +1,10 @@
 #![feature(map_first_last)]
 
+use rand::{thread_rng, Rng};
+use rand::distributions::Alphanumeric;
 use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::fmt::Display;
 use md5::compute;
 
 trait Hash {
@@ -23,11 +26,11 @@ fn test_string_md5_hash() {
 }
 
 struct ConsistentHash<K, V> {
-    ring: BTreeMap<K, Arc<V>>,
+    ring: BTreeMap<K, Arc<Mutex<V>>>,
     replicas: i32,
 } 
 
-impl<K: Hash + Ord, V> ConsistentHash<K, V> {
+impl<K: Hash + Ord + Display, V: Display> ConsistentHash<K, V> {
     fn new(replicas: i32) -> Result<ConsistentHash<K, V>, String> {
         if replicas <= 0 {
             return Err(String::from("replcia count must be greater than 0"));
@@ -39,8 +42,16 @@ impl<K: Hash + Ord, V> ConsistentHash<K, V> {
         })
     }
 
+    fn print_node(&self) {
+        for (key, value) in self.ring.iter() {
+            
+            let value = value.lock().unwrap();
+            println!("{}: {}", key, value);
+        }
+    }
+
     fn add_node(&mut self, key: K, value: V) -> Result<(), String> {
-        let value = Arc::new(value);
+        let value = Arc::new(Mutex::new(value));
         for i in 0..self.replicas {
             let value = value.clone();
             if self.ring.contains_key(&key.hash(i)) {
@@ -51,9 +62,9 @@ impl<K: Hash + Ord, V> ConsistentHash<K, V> {
         Ok(())
     }
 
-    fn get_node(&self, name: &K) -> Option<&Arc<V>> {
+    fn get_node(&self, name: &K) -> Option<&Arc<Mutex<V>>> {
         if let Some(key) = self.search_nearest(name) {
-            return self.ring.get(key)
+            return self.ring.get(key);
         }
         None
     }
@@ -72,25 +83,25 @@ impl<K: Hash + Ord, V> ConsistentHash<K, V> {
     fn search_nearest(&self, name: &K) -> Option<&K> {
         // TODO: Binary search
         let mut map_iter = self.ring.iter().peekable();
+        
         let first_entry = match map_iter.peek() {
             Some(entry) => entry.0,
             None => { return None; },
         };
-        
-        for (key, _) in map_iter.clone() {
-            match map_iter.peek() {
 
-                Some(next_entry) => {
-                    if *next_entry.0 > *name {
-                        return Some(key);
-                    } 
-                },
-                None => {
-                    return Some(first_entry);
-                }
+        for _ in 0..self.ring.len() {
+            let cur = match map_iter.next() {
+                Some(cur) => cur,
+                None => { return None; },
+            };
+
+            if let Some(next) = map_iter.peek() {
+                if *next.0 > *name {
+                    return Some(cur.0);
+                } 
             }
         }
-        None
+        Some(first_entry)
     }
 }
 
@@ -104,11 +115,6 @@ mod tests {
             Ok(ring) => ring,
             Err(err) => panic!(err),
         };
-
-        consistent_hash.add_node(String::from("node1"), 1).unwrap_err();
-        consistent_hash.add_node(String::from("node2"), 2).unwrap_err();
-        consistent_hash.add_node(String::from("node3"), 3).unwrap_err();
-        consistent_hash.add_node(String::from("node4"), 4).unwrap_err();
     }
 
     #[test]
@@ -118,5 +124,36 @@ mod tests {
             Ok(ring) => ring,
             Err(err) => panic!(err),
         };
+    }
+
+    #[test]
+    fn property_based() {
+        let mut consistent_hash: ConsistentHash<String,i32> = match ConsistentHash::new(100) {
+            Ok(ring) => ring,
+            Err(err) => panic!(err),
+        };
+
+        consistent_hash.add_node("Node-1".to_string(), 0).unwrap();
+        consistent_hash.add_node("Node-2".to_string(), 0).unwrap();
+        consistent_hash.add_node("Node-3".to_string(), 0).unwrap();
+        consistent_hash.add_node("Node-4".to_string(), 0).unwrap();
+
+        for _ in 0..=100 {
+            let rand_string: String = thread_rng()
+                .sample_iter(&Alphanumeric)
+                .take(30)
+                .collect();
+
+            let counter = match consistent_hash.get_node(&rand_string){
+                Some(val) => {
+                    val
+                },
+                None => { panic!("None Recieved") },
+            };
+
+            let mut counter_lock = counter.lock().unwrap();
+            *counter_lock = *counter_lock + 1;
+        }
+        consistent_hash.print_node();
     }
 }
