@@ -1,8 +1,11 @@
 [package]
-name = "ConsistentHash"
+name = "consistent_hashing"
+description = "ConsistentHashing Alogrithm in Rust"
 version = "0.1.0"
 authors = ["Stephen Leyva <sleyva1297@gmail.com>"]
+license = "MIT"
 edition = "2018"
+keywords = ["loadbalancing"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
