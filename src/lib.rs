@@ -1,10 +1,13 @@
 #![feature(map_first_last)]
+#![feature(test)]
 
 use rand::Rng;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 use std::fmt::Display;
 use md5::compute;
+
+extern crate test;
 
 trait Hash {
     fn hash(&self, weight: i32) -> u128;
@@ -110,6 +113,7 @@ impl<K: Hash + Ord + Display, V: Display> ConsistentHash<K, V> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use test::Bencher;
 
     #[test]
     fn new_consistent_hash() {
@@ -180,5 +184,33 @@ mod tests {
             };
             panic!("Too much deviation in my partitions");
         }
+    }
+
+    #[bench]
+    fn bench_consistent_search(b: &mut Bencher) {
+        let mut ring: ConsistentHash<String,String> = match ConsistentHash::new(1000) {
+            Ok(ring) => ring,
+            Err(err) => panic!(err),
+        };
+
+        for i in 1..11 {
+            let node_name = format!("node{}", i);
+            let node_val = format!("node_value{}", i);
+            match ring.add_node(node_name, node_val) {
+                Err(err) => panic!(err),
+                Ok(()) => (),
+            };
+        }
+
+        let mut rng = rand::thread_rng();
+        let num_values = 10000;
+        
+        b.iter(|| {
+            let rand_num: u16 = rng.gen_range(0, num_values);
+            match ring.get_node(&rand_num.to_string()){
+                Some(_) => {},
+                None => panic!("Not found!"),
+            };
+        })
     }
 }
