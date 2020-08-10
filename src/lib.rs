@@ -1,32 +1,32 @@
 #![feature(map_first_last)]
 
-use rand::{thread_rng, Rng};
-use rand::distributions::Alphanumeric;
-use std::collections::BTreeMap;
+use rand::Rng;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 use std::fmt::Display;
 use md5::compute;
 
 trait Hash {
-    fn hash(&self, weight: i32) -> Self;
+    fn hash(&self, weight: i32) -> u128;
 }
 
 impl Hash for String {
-    fn hash(&self, weight: i32) -> Self {
+    fn hash(&self, weight: i32) -> u128 {
         let hash_string = format!("{}-{}", self, weight);
         let digest = compute(hash_string);
-        return format!("{:x}", digest);
+        return u128::from_be_bytes(*digest);
     }
 }
 
 #[test]
 fn test_string_md5_hash() {
     let hash = String::from("test").hash(0);
-    assert_eq!(hash, "86639701cdcc5b39438a5f009bd74cb1");
+    assert_eq!(hash, 178633651610943467493091302425572625585);
 }
 
 struct ConsistentHash<K, V> {
-    ring: BTreeMap<K, Arc<Mutex<V>>>,
+    ring: BTreeMap<u128, Arc<Mutex<V>>>,
+    keys: Vec<K>,
     replicas: i32,
 } 
 
@@ -38,6 +38,7 @@ impl<K: Hash + Ord + Display, V: Display> ConsistentHash<K, V> {
         
         Ok(ConsistentHash {
             ring: BTreeMap::new(),
+            keys: Vec::new(),
             replicas,
         })
     }
@@ -59,12 +60,13 @@ impl<K: Hash + Ord + Display, V: Display> ConsistentHash<K, V> {
             }
             self.ring.insert(key.hash(i), value);
         }
+        self.keys.push(key);
         Ok(())
     }
 
     fn get_node(&self, name: &K) -> Option<&Arc<Mutex<V>>> {
-        if let Some(key) = self.search_nearest(name) {
-            return self.ring.get(key);
+        if let Some(key) = self.search_nearest(name.hash(0)) {
+            return self.ring.get(&key);
         }
         None
     }
@@ -80,7 +82,7 @@ impl<K: Hash + Ord + Display, V: Display> ConsistentHash<K, V> {
         Ok(())
     }
 
-    fn search_nearest(&self, name: &K) -> Option<&K> {
+    fn search_nearest(&self, name: u128) -> Option<u128> {
         // TODO: Binary search
         let mut map_iter = self.ring.iter().peekable();
         
@@ -96,12 +98,12 @@ impl<K: Hash + Ord + Display, V: Display> ConsistentHash<K, V> {
             };
 
             if let Some(next) = map_iter.peek() {
-                if *next.0 > *name {
-                    return Some(cur.0);
+                if *next.0 > name {
+                    return Some(*cur.0);
                 } 
             }
         }
-        Some(first_entry)
+        Some(*first_entry)
     }
 }
 
@@ -128,32 +130,55 @@ mod tests {
 
     #[test]
     fn property_based() {
-        let mut consistent_hash: ConsistentHash<String,i32> = match ConsistentHash::new(100) {
+        let mut ring: ConsistentHash<String,String> = match ConsistentHash::new(1000) {
             Ok(ring) => ring,
             Err(err) => panic!(err),
         };
 
-        consistent_hash.add_node("Node-1".to_string(), 0).unwrap();
-        consistent_hash.add_node("Node-2".to_string(), 0).unwrap();
-        consistent_hash.add_node("Node-3".to_string(), 0).unwrap();
-        consistent_hash.add_node("Node-4".to_string(), 0).unwrap();
+        let num_nodes = 10;
+        let num_hits = 1000;
+        let num_values = 10000;
 
-        for _ in 0..=100 {
-            let rand_string: String = thread_rng()
-                .sample_iter(&Alphanumeric)
-                .take(30)
-                .collect();
+        for i in 1..num_nodes+1 {
+            let node_name = format!("node{}", i);
+            let node_val = format!("node_value{}", i);
+            match ring.add_node(node_name, node_val) {
+                Err(err) => panic!(err),
+                Ok(()) => (),
+            };
+        }
 
-            let counter = match consistent_hash.get_node(&rand_string){
-                Some(val) => {
-                    val
-                },
-                None => { panic!("None Recieved") },
+        let mut distributions: HashMap<String, i32> = HashMap::new();
+
+        let mut rng = rand::thread_rng();
+        for _ in 0..num_hits {
+            let rand_num: u16 = rng.gen_range(0, num_values);
+            let node = match ring.get_node(&rand_num.to_string()){
+                Some(node) => node,
+                None => panic!("Not found!"),
             };
 
-            let mut counter_lock = counter.lock().unwrap();
-            *counter_lock = *counter_lock + 1;
+            let distribution_key = node.lock().unwrap();
+
+            let mut count = match distributions.get(&*distribution_key) {
+                Some(result) => *result,
+                None => 0,
+            };
+
+            count += 1;
+            distributions.insert(String::from(&*distribution_key), count);
         }
-        consistent_hash.print_node();
+
+        assert_eq!(distributions.values().sum::<i32>(), num_hits);
+        
+        let min = distributions.values().min().unwrap();
+        let max = distributions.values().max().unwrap();
+        if (*max - *min) > 40 {
+            for (key, value) in distributions.iter() {
+                // Check Deviation for 10 node 100 virtual node partition
+               println!("{}: {}", key, value);
+            };
+            panic!("Too much deviation in my partitions");
+        }
     }
 }
