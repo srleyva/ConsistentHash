@@ -1,8 +1,7 @@
 #![feature(map_first_last)]
 #![feature(test)]
 
-use rand::Rng;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::fmt::Display;
 use md5::compute;
@@ -21,16 +20,11 @@ impl Hash for String {
     }
 }
 
-#[test]
-fn test_string_md5_hash() {
-    let hash = String::from("test").hash(0);
-    assert_eq!(hash, 178633651610943467493091302425572625585);
-}
-
 struct ConsistentHash<K, V> {
-    ring: BTreeMap<u128, Arc<Mutex<V>>>,
-    keys: Vec<K>,
+    ring: HashMap<u128, Arc<Mutex<V>>>,
+    keys: Vec<u128>,
     replicas: i32,
+    user_keys: Vec<K>,
 } 
 
 impl<K: Hash + Ord + Display, V: Display> ConsistentHash<K, V> {
@@ -40,16 +34,16 @@ impl<K: Hash + Ord + Display, V: Display> ConsistentHash<K, V> {
         }
         
         Ok(ConsistentHash {
-            ring: BTreeMap::new(),
+            ring: HashMap::new(),
             keys: Vec::new(),
+            user_keys: Vec::new(),
             replicas,
         })
     }
 
     fn print_node(&self) {
-        for (key, value) in self.ring.iter() {
-            
-            let value = value.lock().unwrap();
+        for key in self.keys.iter() {
+            let value = self.ring.get(key).unwrap().lock().unwrap();
             println!("{}: {}", key, value);
         }
     }
@@ -58,12 +52,16 @@ impl<K: Hash + Ord + Display, V: Display> ConsistentHash<K, V> {
         let value = Arc::new(Mutex::new(value));
         for i in 0..self.replicas {
             let value = value.clone();
-            if self.ring.contains_key(&key.hash(i)) {
+            let hash_key = key.hash(i);
+            if self.ring.contains_key(&hash_key) {
                 return Err(String::from("Key already in ring"));
             }
-            self.ring.insert(key.hash(i), value);
+            self.ring.insert(hash_key, value);
+            match self.keys.binary_search(&hash_key) {
+                Ok(_) => {} // element already in vector @ `pos` 
+                Err(pos) => self.keys.insert(pos, hash_key),
+            }
         }
-        self.keys.push(key);
         Ok(())
     }
 
@@ -86,38 +84,37 @@ impl<K: Hash + Ord + Display, V: Display> ConsistentHash<K, V> {
     }
 
     fn search_nearest(&self, name: u128) -> Option<u128> {
-        // TODO: Binary search
-        let mut map_iter = self.ring.iter().peekable();
-        
-        let first_entry = match map_iter.peek() {
-            Some(entry) => entry.0,
-            None => { return None; },
-        };
-
-        for _ in 0..self.ring.len() {
-            let cur = match map_iter.next() {
-                Some(cur) => cur,
-                None => { return None; },
-            };
-
-            if let Some(next) = map_iter.peek() {
-                if *next.0 > name {
-                    return Some(*cur.0);
-                } 
-            }
+        if self.keys.is_empty() {
+            return None;
         }
-        Some(*first_entry)
+
+        if name > *self.keys.last().unwrap() {
+            return Some(*self.keys.first().unwrap());
+        }
+
+        return match self.keys.binary_search(&name) {
+            Ok(pos) => Some(self.keys[pos]),
+            Err(pos) => Some(self.keys[pos + 1]),
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use rand::Rng;
+    use std::collections::HashMap;
     use super::*;
     use test::Bencher;
 
     #[test]
+    fn test_string_md5_hash() {
+        let hash = String::from("test").hash(0);
+        assert_eq!(hash, 178633651610943467493091302425572625585);
+    }
+
+    #[test]
     fn new_consistent_hash() {
-        let mut consistent_hash: ConsistentHash<String,i32> = match ConsistentHash::new(10) {
+        let _: ConsistentHash<String,i32> = match ConsistentHash::new(10) {
             Ok(ring) => ring,
             Err(err) => panic!(err),
         };
@@ -126,7 +123,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn fail_if_bad_replicas() {
-        let consistent_hash: ConsistentHash<String,i32> = match ConsistentHash::new(-20) {
+        let _: ConsistentHash<String,i32> = match ConsistentHash::new(-20) {
             Ok(ring) => ring,
             Err(err) => panic!(err),
         };
