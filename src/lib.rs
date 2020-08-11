@@ -7,7 +7,7 @@ use md5::compute;
 
 extern crate test;
 
-trait Hash {
+pub trait Hash {
     fn hash(&self, weight: i32) -> u128;
 }
 
@@ -19,7 +19,7 @@ impl Hash for String {
     }
 }
 
-trait Evict<RHS=Self> {
+pub trait Evict<RHS=Self> {
     fn evict(self) -> Self;
     fn merge(&mut self, item: &RHS) -> ();
 }
@@ -44,7 +44,7 @@ impl Evict for String {
     }
 }
 
-struct ConsistentHash<K, V> {
+pub struct ConsistentHash<K, V> {
     ring: HashMap<u128, Arc<Mutex<V>>>,
     keys: Vec<u128>,
     replicas: i32,
@@ -52,7 +52,7 @@ struct ConsistentHash<K, V> {
 } 
 
 impl<K: Hash + Ord + Display, V: Display + Evict> ConsistentHash<K, V> {
-    fn new(replicas: i32) -> Result<ConsistentHash<K, V>, String> {
+    pub fn new(replicas: i32) -> Result<ConsistentHash<K, V>, String> {
         if replicas <= 0 {
             return Err(String::from("replcia count must be greater than 0"));
         }
@@ -65,14 +65,14 @@ impl<K: Hash + Ord + Display, V: Display + Evict> ConsistentHash<K, V> {
         })
     }
 
-    fn print_node(&self) {
+    pub fn print_node(&self) {
         for key in self.keys.iter() {
             let value = self.ring.get(key).unwrap().lock().unwrap();
             println!("{}: {}", key, value);
         }
     }
 
-    fn add_node(&mut self, key: K, value: V) -> Result<(), String> {
+    pub fn add_node(&mut self, key: K, value: V) -> Result<(), String> {
         let value = Arc::new(Mutex::new(value));
         for i in 0..self.replicas {
             let value = value.clone();
@@ -90,14 +90,14 @@ impl<K: Hash + Ord + Display, V: Display + Evict> ConsistentHash<K, V> {
         Ok(())
     }
 
-    fn get_node(&self, name: &K) -> Option<&Arc<Mutex<V>>> {
+    pub fn get_node(&self, name: &K) -> Option<&Arc<Mutex<V>>> {
         if let Some(key) = self.search_nearest(name.hash(0)) {
             return self.ring.get(&key);
         }
         None
     }
 
-    fn delete_node(&mut self, name: &K) -> Result<(), String> {
+    pub fn delete_node(&mut self, name: &K) -> Result<(), String> {
         // evict values for move
         let hash_key = name.hash(0);
         let moved_value = self.ring.get(&hash_key).unwrap();
@@ -126,7 +126,7 @@ impl<K: Hash + Ord + Display, V: Display + Evict> ConsistentHash<K, V> {
         Ok(())
     }
 
-    fn search_nearest(&self, name: u128) -> Option<u128> {
+    pub fn search_nearest(&self, name: u128) -> Option<u128> {
         if self.keys.is_empty() {
             return None;
         }
