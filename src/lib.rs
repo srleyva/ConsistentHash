@@ -1,4 +1,3 @@
-#![feature(map_first_last)]
 #![feature(test)]
 
 use std::collections::HashMap;
@@ -20,6 +19,31 @@ impl Hash for String {
     }
 }
 
+trait Evict<RHS=Self> {
+    fn evict(self) -> Self;
+    fn merge(&mut self, item: &RHS) -> ();
+}
+
+impl Evict for i32 {
+    fn evict(self) -> Self {
+        return self;
+    }
+
+    fn merge(&mut self, item: &i32) -> () {
+        *self += item
+    }
+}
+
+impl Evict for String {
+    fn evict(self) -> Self {
+        return self;
+    }
+
+    fn merge(&mut self, item: &String) -> () {
+        *self += &item;
+    }
+}
+
 struct ConsistentHash<K, V> {
     ring: HashMap<u128, Arc<Mutex<V>>>,
     keys: Vec<u128>,
@@ -27,7 +51,7 @@ struct ConsistentHash<K, V> {
     user_keys: Vec<K>,
 } 
 
-impl<K: Hash + Ord + Display, V: Display> ConsistentHash<K, V> {
+impl<K: Hash + Ord + Display, V: Display + Evict> ConsistentHash<K, V> {
     fn new(replicas: i32) -> Result<ConsistentHash<K, V>, String> {
         if replicas <= 0 {
             return Err(String::from("replcia count must be greater than 0"));
@@ -62,6 +86,7 @@ impl<K: Hash + Ord + Display, V: Display> ConsistentHash<K, V> {
                 Err(pos) => self.keys.insert(pos, hash_key),
             }
         }
+        self.user_keys.push(key);
         Ok(())
     }
 
@@ -73,13 +98,31 @@ impl<K: Hash + Ord + Display, V: Display> ConsistentHash<K, V> {
     }
 
     fn delete_node(&mut self, name: &K) -> Result<(), String> {
-        // TODO: Rebalance
+        // evict values for move
+        let hash_key = name.hash(0);
+        let moved_value = self.ring.get(&hash_key).unwrap();
+        let moved_value = moved_value.clone();
+        let moved_value = moved_value.lock().unwrap();
+        
         for i in 0..self.replicas {
-            if !self.ring.contains_key(&name.hash(i)) {
+            let hash_key = &name.hash(i);
+            match self.keys.binary_search(&hash_key) {
+                Ok(pos) => self.keys.remove(pos),
+                Err(_) => panic!("key not found in keys"),
+            };
+
+            if !self.ring.contains_key(&hash_key) {
                 return Err(String::from("Key does not exist in ring"));
             }
             self.ring.remove(&name.hash(i));
         }
+
+        let new_key = self.search_nearest(hash_key).unwrap();
+        let value = self.ring.get_mut(&new_key).unwrap();
+        let mut value = value.lock().unwrap();
+
+        value.merge(&*moved_value);
+
         Ok(())
     }
 
@@ -127,6 +170,27 @@ mod tests {
             Ok(ring) => ring,
             Err(err) => panic!(err),
         };
+    }
+
+    #[test]
+    fn test_delete_rebalance() {
+        let mut ring: ConsistentHash<String, i32> = ConsistentHash::new(10000).unwrap();
+        
+        for i in 1..4 {
+            let node_name = format!("node{}", i);
+            let node_val = 12;
+            match ring.add_node(node_name, node_val) {
+                Err(err) => panic!(err),
+                Ok(()) => (),
+            };
+        }
+
+        ring.delete_node(&format!("node1")).unwrap();
+
+        let value = ring.get_node(&format!("node2")).unwrap();
+        let value = value.lock().unwrap();
+
+        assert_eq!(*value, 24);
     }
 
     #[test]
