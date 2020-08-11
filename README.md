@@ -4,13 +4,14 @@ Consistent Hashing is a distributed system algorithm for assigning values to par
 
 ## Example:
 
-Using the algorithm to LB redis cache. (Crate `redis = "0.17.0"`)
+Using the algorithm to LB redis cache. (Crate `redis = "0.17.0"`).
+
+While the key must implement the hash trait to define a hashing strategy.
+
+The Value must implement the Evict trait to define rebalancing behavior. 
 
 ```rust
-let mut ring: ConsistentHash<String,redis::Client> = match ConsistentHash::new(100) {
-    Ok(ring) => ring,
-    Err(err) => panic!(err),
-};
+let mut ring: ConsistentHash<String,redis::Client> = match ConsistentHash::new(100).unwrap();
 
 ring.add_node("redis://my-redis-node-1".to_string(), redis::Client::open("redis://my-redis-node-1")?).unwrap();
 ring.add_node("redis://my-redis-node-2".to_string(), redis::Client::open("redis://my-redis-node-2")?).unwrap();
