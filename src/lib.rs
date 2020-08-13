@@ -48,7 +48,7 @@ pub struct ConsistentHash<K, V> {
     ring: HashMap<u128, Arc<Mutex<V>>>,
     keys: Vec<u128>,
     replicas: i32,
-    user_keys: Vec<K>,
+    pub user_keys: Vec<K>,
 } 
 
 impl<K: Hash + Ord + Display, V: Display + Evict> ConsistentHash<K, V> {
