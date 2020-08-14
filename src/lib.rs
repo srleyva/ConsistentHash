@@ -127,7 +127,12 @@ impl<K: Hash + Ord + Display, V: Display + Evict + Clone> ConsistentHash<K, V> {
 
         return match self.keys.binary_search(&name) {
             Ok(pos) => Some(self.keys[pos]),
-            Err(pos) => Some(self.keys[pos + 1]),
+            Err(pos) => {
+                match self.keys.get(pos + 1) {
+                    Some(value) => Some(*value),
+                    None => Some(self.keys[0]),
+                }
+            }
         }
     }
 }
