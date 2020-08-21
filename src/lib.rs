@@ -20,7 +20,7 @@ impl Hash for String {
 
 pub trait Evict<RHS=Self> {
     fn evict(self) -> Self;
-    fn merge(&mut self, item: RHS) -> ();
+    fn merge(&mut self, item: RHS) -> Result<(), String>;
 }
 
 impl Evict for i32 {
@@ -28,8 +28,9 @@ impl Evict for i32 {
         return self;
     }
 
-    fn merge(&mut self, item: i32) -> () {
-        *self += item
+    fn merge(&mut self, item: i32) -> Result<(), String> {
+        *self += item;
+        Ok(())
     }
 }
 
@@ -38,8 +39,9 @@ impl Evict for String {
         return self;
     }
 
-    fn merge(&mut self, item: String) -> () {
+    fn merge(&mut self, item: String) -> Result<(), String> {
         *self += &item;
+        Ok(())
     }
 }
 
@@ -50,7 +52,7 @@ pub struct ConsistentHash<K, V> {
     pub user_keys: Vec<K>,
 } 
 
-impl<K: Hash + Ord + Display, V: Display + Evict + Clone> ConsistentHash<K, V> {
+impl<K: Hash + Ord, V: Evict + Clone> ConsistentHash<K, V> {
     pub fn new(replicas: i32) -> Result<ConsistentHash<K, V>, String> {
         if replicas <= 0 {
             return Err(String::from("replcia count must be greater than 0"));
@@ -64,7 +66,7 @@ impl<K: Hash + Ord + Display, V: Display + Evict + Clone> ConsistentHash<K, V> {
         })
     }
 
-    pub fn print_node(&self) {
+    pub fn print_node(&self) where K: Display, V: Display {
         for key in self.keys.iter() {
             let value = self.ring.get(key).unwrap();
             println!("{}: {}", key, value);
@@ -94,11 +96,17 @@ impl<K: Hash + Ord + Display, V: Display + Evict + Clone> ConsistentHash<K, V> {
         None
     }
 
+    pub fn get_mut_node(&mut self, name: &K) -> Option<&mut V> {
+        if let Some(key) = self.search_nearest(name.hash(0)) {
+            return self.ring.get_mut(&key);
+        }
+        None
+    }
+
     pub fn delete_node(&mut self, name: &K) -> Result<(), String> {
-        // evict values for move
         let hash_key = name.hash(0);
-        let _moved_value = self.ring.get(&hash_key).unwrap().clone();
-        
+        let replica_value = self.ring.get(&hash_key).unwrap().clone().evict();
+
         for i in 0..self.replicas {
             let hash_key = &name.hash(i);
             match self.keys.binary_search(&hash_key) {
@@ -109,10 +117,13 @@ impl<K: Hash + Ord + Display, V: Display + Evict + Clone> ConsistentHash<K, V> {
             if !self.ring.contains_key(&hash_key) {
                 return Err(String::from("Key does not exist in ring"));
             }
-            self.ring.remove(&name.hash(i));
+            self.ring.remove(&hash_key).unwrap();
         }
 
-        // TODO Rebalance
+        // Get nearest node for merge
+        let new_node = self.get_mut_node(name).unwrap();
+
+        new_node.merge(replica_value).unwrap();
         Ok(())
     }
 
@@ -167,29 +178,29 @@ mod tests {
         };
     }
 
-    // #[test]
-    // fn test_delete_rebalance() {
-    //     let mut ring: ConsistentHash<String, i32> = ConsistentHash::new(1).unwrap();
+    #[test]
+    fn test_delete_rebalance() {
+        let mut ring: ConsistentHash<String, i32> = ConsistentHash::new(1).unwrap();
         
-    //     for i in 1..4 {
-    //         let node_name = format!("node{}", i);
-    //         let node_val = 12;
-    //         match ring.add_node(node_name, node_val) {
-    //             Err(err) => panic!(err),
-    //             Ok(()) => (),
-    //         };
-    //     }
+        for i in 1..=4 {
+            let node_name = format!("node{}", i);
+            let node_val = 12;
+            match ring.add_node(node_name, node_val) {
+                Err(err) => panic!(err),
+                Ok(()) => (),
+            };
+        }
 
-    //     ring.delete_node(&format!("node1")).unwrap();
+        ring.delete_node(&format!("node1")).unwrap();
+        let new_value = ring.get_node(&format!("node1")).unwrap();
 
-    //     println!("{}", ring.get_node(&format!("node2")).unwrap());
-    //     println!("{}", ring.get_node(&format!("node3")).unwrap());
-    //     println!("{}", ring.get_node(&format!("node4")).unwrap());
-    // }
+        assert_eq!(*new_value, 24);
+
+    }
 
     #[test]
     fn property_based() {
-        let mut ring: ConsistentHash<String,String> = match ConsistentHash::new(1000) {
+        let mut ring: ConsistentHash<String,String> = match ConsistentHash::new(10000) {
             Ok(ring) => ring,
             Err(err) => panic!(err),
         };
@@ -230,7 +241,7 @@ mod tests {
         
         let min = distributions.values().min().unwrap();
         let max = distributions.values().max().unwrap();
-        if (*max - *min) > 40 {
+        if (*max - *min) > 100 {
             for (key, value) in distributions.iter() {
                 // Check Deviation for 10 node 100 virtual node partition
                println!("{}: {}", key, value);
